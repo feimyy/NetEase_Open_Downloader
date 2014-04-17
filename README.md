@@ -1,19 +1,27 @@
-ÍøÒ×¹«¿ª¿ÎÊÓÆµÏÂÔØ½Å±¾
+ï»¿###ç½‘æ˜“å…¬å¼€è¯¾è§†é¢‘ä¸‹è½½è„šæœ¬
+
+##å®‰è£…æŒ‡å—
+1. å®‰è£…go 1.10+
+
+	http://code.google.com/p/go
+
+2. ä¸‹è½½ä»£ç ï¼ˆWindowsç”¨æˆ·è¯·åœ¨git-bashé‡Œæ‰§è¡Œï¼‰
+
+	git clone https://github.com/feimyy/NetEase_Open_Downloader
+
+3. å®‰è£…libiconvå’Œgcc,(æ³¨æ„:å¦‚æœä½ çš„goä¸º64ä½ç‰ˆæœ¬,é‚£ä¹ˆgccä¹Ÿå¿…é¡»æ˜¯64ä½ç‰ˆæœ¬)
+
+	wget http://ftp.gnu.org/pub/gnu/libiconv/libiconv-1.14.tar.gz
+	./configure
+	make
+	make install
+
+4. åœ¨å‘½ä»¤è¡Œé‡Œè¿è¡Œ
+    go get github.com/feimyy/iconv
+	cd src/
+	go build 163.go
+		
 
 
-°²×°:
-
-go get github.com/feimyy/iconv
-
-Èç¹û³öÏÖ´íÎóÌáÊ¾,ÇëÏÂÔØ²¢°²×°libiconvºÍgcc
-
-wget http://ftp.gnu.org/pub/gnu/libiconv/libiconv-1.14.tar.gz
-./configure
-make
-make install
-
-go get ³É¹¦ºó
-Ö±½Ógo build ¼´¿É
-
-×¢Òâ:
-    Èç¹ûÔÚwindowsÏÂ±àÒëºó£¬±àÒëºóµÄÎÄ¼şÈÔÈ»ÒÀÀµlibiconvµÄdllÎÄ¼ş(libiconv-2.dll)
+##æ³¨æ„äº‹é¡¹:
+    å¦‚æœåœ¨windowsä¸‹ç¼–è¯‘åï¼Œç¼–è¯‘åçš„æ–‡ä»¶ä»ç„¶ä¾èµ–libiconvçš„dllæ–‡ä»¶(libiconv-2.dll)
