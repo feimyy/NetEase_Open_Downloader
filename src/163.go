@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/ioutil"
 	// "log"
+	"flag"
 	"net/http"
 	"os"
 	"regexp"
@@ -21,8 +22,9 @@ import (
 
 var (
 	filename_DisallowedChar string = "/\\:?*\"|" //windows系统文件名不被允许的字符
-	retry_max_num                  = 10
+	retry_max_num                  = 3
 	default_file_size       int64  = 1024 * 1024 * 1024 * 10 //10M
+	default_routine_num            = 10
 )
 
 type ResourceInfo struct {
@@ -55,10 +57,6 @@ func getSourceCode(Url string) (sourceCode string) {
 	defer rep.Body.Close()
 
 	return
-}
-func getPage() string {
-
-	return "http://v.163.com/special/opencourse/americaprogram.html"
 }
 
 func getResourceDownloadList(PageSourceCode string) *[]ResourceInfo {
@@ -420,11 +418,9 @@ func Ventilator(item ResourceInfo, RoutineCount int, elapsee_senconds chan int64
 		channels := make([]chan int64, 0)
 
 		block := ContentLength / int64(RoutineCount)
-		fmt.Printf("Ori block %d\n", block)
 		if ContentLength%int64(RoutineCount) != 0 {
 			block += 1
 		}
-		fmt.Printf("New block %d\n", block)
 
 		//创建并运行Routines
 		files := make([]*os.File, RoutineCount)
@@ -449,9 +445,7 @@ func Ventilator(item ResourceInfo, RoutineCount int, elapsee_senconds chan int64
 			start := block * int64(i)
 			end := block*int64(i+1) - 1
 			if end >= ContentLength {
-				fmt.Printf("Ori end %d\n", end)
 				end = ContentLength - 1
-				fmt.Printf("New end %d\n", end)
 			}
 
 			go Worker(files[i], item.DownUrl, start, end, v)
@@ -466,7 +460,7 @@ func Ventilator(item ResourceInfo, RoutineCount int, elapsee_senconds chan int64
 				fmt.Printf("文件 %s 的 第 %d 个下载Routine下载成功，消耗时间:%d s\n", file_name, i, r)
 				costSenconds += r
 			} else { //该routine失败,重试之
-				fmt.Printf("文件 %s 的 第 %d 个下载Routine下载失败,重试...\n", file_name, i, r)
+				fmt.Printf("文件 %s 的 第 %d 个下载Routine下载失败,重试...\n", file_name, i)
 
 				start := block * int64(i)
 				end := block*int64(i+1) - 1
@@ -479,7 +473,7 @@ func Ventilator(item ResourceInfo, RoutineCount int, elapsee_senconds chan int64
 					go Worker(file, item.DownUrl, start, end, v)
 					new_r := <-v
 					if new_r != -1 {
-						fmt.Printf("文件 %s 的 第 %d 个下载Routine重新下载成功，消耗时间:%d s\n", file_name, i, r)
+						fmt.Printf("文件 %s 的 第 %d 个下载Routine重新下载成功，消耗时间:%d s\n", file_name, i)
 						break
 					}
 				}
@@ -516,13 +510,13 @@ func Worker(file *os.File, Url string, startOffset, endOffset int64, channel cha
 		}
 		RangeValue := fmt.Sprintf("bytes=%d-%d", startOffset, endOffset)
 		req.Header.Add("Range", RangeValue)
-
+		req.Header.Add("Accept-Encoding", "identity")
 		client := &http.Client{}
 		var rep *http.Response = nil
 		for i := retry_max_num; i > 0; i-- {
 			rep, err = client.Do(req)
 			if err != nil {
-				fmt.Printf("不能连接到指定的Url :%s,error :%s\n\tRetry it....\n", Url, err)
+				fmt.Printf("不能连接到指定的Url :%s\n,\terror :%s\n\tRetry it....\n", Url, err)
 			} else {
 				break
 			}
@@ -531,18 +525,22 @@ func Worker(file *os.File, Url string, startOffset, endOffset int64, channel cha
 			channel <- -1 //该任务失败，该任务需要重试
 			return
 		}
+
 		var i int = 0
 		file.Seek(startOffset, 0)
 		var needSize int64 = (endOffset - startOffset + 1)
 		for i = retry_max_num; i > 0; i-- {
 			written, err := io.CopyN(file, rep.Body, needSize)
 			if err == nil && written == needSize {
-				fmt.Printf("Written :%d,StartOffset :%d ,EndOffset :%d,needSize :%d\n", written, startOffset, endOffset, needSize)
+				fmt.Printf("File :%s ,Range : %d-%d ,needSize :%d ,written :%d\n", Stat.Name(), startOffset, endOffset, needSize, written)
 				break
 			} else if err != io.EOF {
-				fmt.Printf("io.Copy() ,error:%s\n", err)
+				fmt.Printf("io.CopyN() error: %s Range : %d - %d ,error:%s\n", Stat.Name(), startOffset, endOffset, err)
 				channel <- -1
 				return
+			} else if err == io.EOF {
+				fmt.Printf("File :%s ,Range : %d-%d ,needSize :%d ,written :%d\n", Stat.Name(), startOffset, endOffset, written)
+				break
 			}
 		}
 
@@ -629,36 +627,61 @@ func Worker(file *os.File, Url string, startOffset, endOffset int64, channel cha
 		}
 	}
 }
+
+func Usage() {
+	fmt.Printf("%s\t--url\t[-rnum]\n", strings.Join(os.Args[0:1], ""))
+	fmt.Printf("\t--url :\n")
+	fmt.Printf("\t\tThe url of opencourse\n")
+	fmt.Printf("\t--rnum :\n")
+	fmt.Printf("\t\tThe number of threads\n\t\tThe param is optional,and the default value is 10\n")
+	fmt.Printf("\nFor example : \n\t%s --url http://v.163.com/special/justice/ --rnum 20\n", strings.Join(os.Args[0:1], ""))
+}
 func main() {
 
-	/*	Url := getPage()
-		sourceCode := getSourceCode(Url)
-		list := getResourceDownloadList(sourceCode)
+	if len(os.Args) < 2 {
+		Usage()
+		return
+	}
 
-		channels := make([]chan int, len(*list))
-		for i, v := range *list {
-			channels[i] = make(chan int)
-			fmt.Printf("第%d集\n\tUrl :%s\n\tName :%s.%s\n", v.Sequence, v.DownUrl, v.Name, v.Suffix)
-			go Ventilator(v, 10, channels[i])
-		}
+	var Url string
+	var RoutineNum int
+	flag.StringVar(&Url, "url", "", "the url of opencourse")
+	flag.IntVar(&RoutineNum, "rnum", default_routine_num, "the number of threads")
+	flag.Parse()
 
-		for i, v := range channels {
+	if len(Url) == 0 {
+		Usage()
+		return
+	}
+	sourceCode := getSourceCode(Url)
+	list := getResourceDownloadList(sourceCode)
 
-			<-v
-			fmt.Printf("第%d下载者退出\n", i)
-		}*/
+	channels := make([]chan int64, 0)
+	for _, v := range *list {
+		channel := make(chan int64)
+		channels = append(channels, channel)
+		/*
+		 TODO : 如果这里也使用routine的话,在Worker协程的io.CopyN可能返回unexcepted EOF
+		*/
+		Ventilator(v, RoutineNum, channel)
+	}
 
-	Test := new(ResourceInfo)
-	Test.Name = "baidu"
-	Test.Suffix = "exe"
+	for i, v := range channels {
+		r := <-v
+		fmt.Printf("文件 ‘%s’ 下载完成!!！ 消耗时间:%ss\n", (*list)[i].Name+"."+(*list)[i].Suffix, r)
+	}
+	//test code
+	/*Test := new(ResourceInfo)
+	Test.Name = "1"
+	Test.Suffix = "iso"
 	Test.Sequence = 0
-	Test.DownUrl = "http://weishi.baidu.com/index/minidownload/50011"
+	Test.DownUrl = Url
 	test_channnel := make(chan int64)
-	go Ventilator(*Test, 50, test_channnel)
+	go Ventilator(*Test, RoutineNum, test_channnel)
 	re := <-test_channnel
 	if re == -1 {
 		fmt.Printf("the test is failed\n")
 	} else {
 		fmt.Printf("the test download is successeful")
-	}
+	}*/
 }
