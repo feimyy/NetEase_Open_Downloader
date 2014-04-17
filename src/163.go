@@ -657,19 +657,23 @@ func main() {
 	list := getResourceDownloadList(sourceCode)
 
 	channels := make([]chan int64, 0)
-	for _, v := range *list {
+	for i, v := range *list {
 		channel := make(chan int64)
 		channels = append(channels, channel)
 		/*
 		 TODO : 如果这里也使用routine的话,在Worker协程的io.CopyN可能返回unexcepted EOF
 		*/
-		Ventilator(v, RoutineNum, channel)
+		for j := retry_max_num; j > 0; j-- {
+			go Ventilator(v, RoutineNum, channel)
+			r := <-channel
+			if r != -1 {
+				fmt.Printf("文件 ‘%s’ 下载完成!!！ 消耗时间:%ss\n", (*list)[i].Name+"."+(*list)[i].Suffix, r)
+				break
+			}
+		}
+
 	}
 
-	for i, v := range channels {
-		r := <-v
-		fmt.Printf("文件 ‘%s’ 下载完成!!！ 消耗时间:%ss\n", (*list)[i].Name+"."+(*list)[i].Suffix, r)
-	}
 	//test code
 	/*Test := new(ResourceInfo)
 	Test.Name = "1"
@@ -677,7 +681,7 @@ func main() {
 	Test.Sequence = 0
 	Test.DownUrl = Url
 	test_channnel := make(chan int64)
-	go Ventilator(*Test, RoutineNum, test_channnel)
+	Ventilator(*Test, RoutineNum, test_channnel)
 	re := <-test_channnel
 	if re == -1 {
 		fmt.Printf("the test is failed\n")
