@@ -660,9 +660,6 @@ func main() {
 	for i, v := range *list {
 		channel := make(chan int64)
 		channels = append(channels, channel)
-		/*
-		 TODO : 如果这里也使用routine的话,在Worker协程的io.CopyN可能返回unexcepted EOF
-		*/
 		for j := retry_max_num; j > 0; j-- {
 			go Ventilator(v, RoutineNum, channel)
 			r := <-channel
