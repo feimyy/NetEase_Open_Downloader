@@ -1,3 +1,7 @@
+/*
+   Author : feimyy <feimyy@hotmail.com>
+   CopyRight : Apache License 2.0
+*/
 package main
 
 import (
@@ -12,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var (
@@ -22,7 +27,7 @@ var (
 
 type ResourceInfo struct {
 	Id       string
-	DownUrL  string
+	DownUrl  string
 	Suffix   string // don't contain the dot(.)
 	Name     string
 	Sequence int //该视频是第几集
@@ -156,11 +161,11 @@ func filterDownloadList(DownloadList []string) []ResourceInfo {
 		//fmt.Printf("len :%d ,down_content_splited :%v\n", len(down_content_splited), down_content_splited)
 		//fmt.Printf("len : %d ,id_content_splited :%v\n", len(id_content_splited), id_content_splited)
 
-		ResourceList[i].DownUrL = down_content_splited[len(down_content_splited)-2]
+		ResourceList[i].DownUrl = down_content_splited[len(down_content_splited)-2]
 		ResourceList[i].Id = id_content_splited[len(id_content_splited)-2]
 
 		//从下载Url中提取后缀名
-		DownUrl_splited := strings.Split(ResourceList[i].DownUrL, ".")
+		DownUrl_splited := strings.Split(ResourceList[i].DownUrl, ".")
 		ResourceList[i].Suffix = DownUrl_splited[len(DownUrl_splited)-1]
 	}
 
@@ -271,7 +276,63 @@ func filtLegalString(old string) string {
       chan : int返回消耗的时间,并且作为结束的标志
 
 */
-func Ventilator(item ResourceInfo, RoutineCount int, elapsee_senconds chan int) {
+
+func GetTargetResourceContentLength(Url string) int64 {
+	req, err := http.NewRequest("GET", Url, nil)
+	if err != nil {
+		fmt.Printf("不能创建Http Request :Url:%s,error: %s\n", Url, err)
+		return -1
+	}
+
+	var rep *http.Response = nil
+	client := &http.Client{}
+	for i := retry_max_num; i > 0; i-- {
+		rep, err = client.Do(req)
+		if err != nil {
+			fmt.Printf("不能连接到指定的Url :%s,error :%s\n\tRetry it....\n", Url)
+		} else {
+			break
+		}
+	}
+	if rep == nil { //获取Response失败
+		return -1
+	}
+	if rep.ContentLength != -1 {
+		return rep.ContentLength
+	} else {
+		return 0
+	}
+}
+
+func IsSupportMultiThread(Url string) int {
+	req, err := http.NewRequest("GET", Url, nil)
+	if err != nil {
+		fmt.Printf("不能创建Http Request :Url:%s,error: %s\n", Url, err)
+		return -1
+	}
+	req.Header.Add("Range", "bytes=0-1")
+
+	var rep *http.Response = nil
+	client := &http.Client{}
+	for i := retry_max_num; i > 0; i-- {
+		rep, err = client.Do(req)
+		if err != nil {
+			fmt.Printf("不能连接到指定的Url :%s,error :%s\n\tRetry it....\n", Url)
+		} else {
+			break
+		}
+	}
+	if rep == nil { //获取Response失败
+		return -1 //发生了网络连接错误
+	}
+	if rep.StatusCode == 206 {
+		return 1 //支持
+	} else {
+		return 0 //不支持
+	}
+
+}
+func Ventilator(item ResourceInfo, RoutineCount int, elapsee_senconds chan int64) {
 
 	//创建文件
 	file_name := fmt.Sprintf("[第%d集]%s.%s", item.Sequence, item.Name, item.Suffix)
@@ -285,34 +346,12 @@ func Ventilator(item ResourceInfo, RoutineCount int, elapsee_senconds chan int) 
 	fmt.Printf("开始下载视频:%s\n", item.Name)
 
 	//获得目标文件大小
-	req, err := http.NewRequest("GET", item.DownUrL, nil)
-	if err != nil {
-		fmt.Printf("不能创建Http Request :Url:%s,error: %s\n", item.DownUrL, err)
-		elapsee_senconds <- -1
-		return
-	}
-
-	var rep *http.Response = nil
-	client := &http.Client{}
-	for i := retry_max_num; i > 0; i-- {
-		rep, err = client.Do(req)
-		if err != nil {
-			fmt.Printf("不能连接到指定的Url :%s,error :%s\n\tRetry it....\n", item.DownUrL)
-		} else {
-			break
-		}
-	}
-	if rep == nil { //获取Response失败
-		elapsee_senconds <- -1 //该任务失败，该任务需要重试
-		return
-	}
-	var ContentLength int64 = 0
-	ContentLength = rep.ContentLength
-	if ContentLength == -1 {
+	ContentLength := GetTargetResourceContentLength(item.DownUrl)
+	if ContentLength == 0 {
 		fmt.Printf("目标文件大小未知,只能使用单线程下载\n")
 		RoutineCount = 1
-	} else {
-		fmt.Printf("文件名:%s,\t大小:%dMb \n\t\tUrl %s\n", file_name, (ContentLength / (1024 * 1024)), item.DownUrL)
+	} else if ContentLength > 0 {
+		fmt.Printf("文件名:%s\n\t大小: %d Mb\n\tBytes : %d bytes\n\tUrl: %s\n", file_name, (ContentLength / (1024 * 1024)), ContentLength, item.DownUrl)
 		if RoutineCount > 1 { //即使服务端支持多线程，只有routineCount大于1才改变大小
 			err = file.Truncate(ContentLength) //使用大小填充指定文件
 			if err != nil {
@@ -321,47 +360,158 @@ func Ventilator(item ResourceInfo, RoutineCount int, elapsee_senconds chan int) 
 				return
 			}
 		}
+	} else if ContentLength == -1 {
+		elapsee_senconds <- -1
+		return
 	}
 
 	//测试目标是否支持Http Header的Range属性
-	req.Header.Add("Range", "bytes=0-1")
-	for i := retry_max_num; i > 0; i-- {
-		rep, err = client.Do(req)
-		if err != nil {
-			fmt.Printf("不能连接到指定的Url :%s,error :%s\n\tRetry it....\n", item.DownUrL)
-		} else {
-			break
-		}
-	}
-	if rep.StatusCode != 206 {
+	IsSupport := IsSupportMultiThread(item.DownUrl)
+	if IsSupport == 0 {
 		RoutineCount = 1
 		fmt.Printf("目标主机不支持多线程下载!,将使用单线程下载\n")
-	} else {
+	} else if IsSupport == 1 {
 		fmt.Printf("目标主机支持多线程下载\n")
+	} else if IsSupport == -1 {
+		elapsee_senconds <- -1
+		return
 	}
 
-	//test
-	channel := make(chan int)
-	if ContentLength == 0 {
-		go Worker(file, item.DownUrL, 0, 0, channel)
-	} else {
-		go Worker(file, item.DownUrL, 0, ContentLength-1, channel)
-	}
-	<-channel
+	if RoutineCount == 1 { //单线程
+		channel := make(chan int64)
+		startTime := time.Now().UnixNano()
+		endTime := time.Now().UnixNano()
+		if ContentLength != 0 { //目标文件大小已知
+			var i int = 0
+			for i = retry_max_num; i > 0; i-- {
+				go Worker(file, item.DownUrl, 0, ContentLength-1, channel)
+				r := <-channel
+				if r != -1 { //routine成功下载文件
+					endTime = time.Now().UnixNano()
+					fmt.Printf("文件 %s 的下载Routine下载成功，消耗时间:%d s\n", file_name, (endTime-startTime)/int64(time.Second))
+					break
+				}
+			}
+			if i < 0 {
+				elapsee_senconds <- -1
+			} else {
+				elapsee_senconds <- ((endTime - startTime) / int64(time.Second))
+			}
+		} else if ContentLength == 0 { //目标文件大小未知
 
-	//end test
-	elapsee_senconds <- item.Sequence
+			//创建goroutine下载文件
+			var i int = 0
+			for i = retry_max_num; i > 0; i-- {
+				go Worker(file, item.DownUrl, 0, 0, channel)
+				r := <-channel
+				if r != -1 { //routine成功下载文件
+					endTime = time.Now().UnixNano()
+					fmt.Printf("文件 %s 的下载Routine下载成功，消耗时间:%d s\n", file_name, (endTime-startTime)/int64(time.Second))
+					break
+				}
+			}
+			if i < 0 {
+				elapsee_senconds <- -1
+			} else {
+				elapsee_senconds <- ((endTime - startTime) / int64(time.Second))
+			}
+		}
+	} else { //多线程下载
+		channels := make([]chan int64, 0)
+
+		block := ContentLength / int64(RoutineCount)
+		fmt.Printf("Ori block %d\n", block)
+		if ContentLength%int64(RoutineCount) != 0 {
+			block += 1
+		}
+		fmt.Printf("New block %d\n", block)
+
+		//创建并运行Routines
+		files := make([]*os.File, RoutineCount)
+		for i := 0; i < RoutineCount; i++ {
+
+			/*
+			   为每一个Routine创建一个只写的文件操作Handle
+			   如果所有的Routine都是用同一个文件操作句柄的话
+			   那个每个file.Seek时可能发生另一个routine改变了文件指针，导致当前Routine将数据写入错误的位置
+			*/
+			fmt.Printf("文件 %s :开始第 %d 个下载Routine\n", file_name, i)
+			files[i], err = os.OpenFile(file_name, os.O_WRONLY, 0666)
+			defer files[i].Close()
+			if err != nil {
+				fmt.Printf("不能打开指定文件 :%s\n", err)
+				os.Exit(0)
+			}
+
+			v := make(chan int64)
+			channels = append(channels, v)
+
+			start := block * int64(i)
+			end := block*int64(i+1) - 1
+			if end >= ContentLength {
+				fmt.Printf("Ori end %d\n", end)
+				end = ContentLength - 1
+				fmt.Printf("New end %d\n", end)
+			}
+
+			go Worker(files[i], item.DownUrl, start, end, v)
+		}
+
+		//等待Routines返回
+		var costSenconds int64 = 0
+		for i, v := range channels {
+			fmt.Printf("文件 %s :开始等待第 %d 个下载Routine退出\n", file_name, i)
+			r := <-v
+			if r != -1 { //routine成功下载文件
+				fmt.Printf("文件 %s 的 第 %d 个下载Routine下载成功，消耗时间:%d s\n", file_name, i, r)
+				costSenconds += r
+			} else { //该routine失败,重试之
+				fmt.Printf("文件 %s 的 第 %d 个下载Routine下载失败,重试...\n", file_name, i, r)
+
+				start := block * int64(i)
+				end := block*int64(i+1) - 1
+				if end >= ContentLength {
+					end = ContentLength - 1
+				}
+
+				var j int = 0
+				for j = retry_max_num; j > 0; j-- {
+					go Worker(file, item.DownUrl, start, end, v)
+					new_r := <-v
+					if new_r != -1 {
+						fmt.Printf("文件 %s 的 第 %d 个下载Routine重新下载成功，消耗时间:%d s\n", file_name, i, r)
+						break
+					}
+				}
+
+				if j < 0 { //下载分段失败
+					errInfo := fmt.Sprintf("文件: %s ,Range :%d-%d :下载失败\n", file_name, start, end)
+					logFile, err := os.OpenFile(item.Name+".err.log", os.O_APPEND|os.O_WRONLY, 0666)
+					defer logFile.Close()
+					if err != nil {
+						fmt.Printf("创建Log文件失败: %s\n", err)
+					} else {
+						logFile.WriteString(errInfo)
+					}
+
+				}
+
+			}
+		}
+		elapsee_senconds <- costSenconds
+	}
 }
 
-func Worker(file *os.File, Url string, startOffset, endOffset int64, channnel chan int) {
+func Worker(file *os.File, Url string, startOffset, endOffset int64, channel chan int64) {
 	Stat, _ := file.Stat()
 	size := Stat.Size()
-	if size > 0 { //多线程
+	if size > 0 && endOffset > startOffset { //多线程
 
+		startTime := time.Now().UnixNano()
 		req, err := http.NewRequest("GET", Url, nil)
 		if err != nil {
 			fmt.Printf("不能创建Http Request :Url:%s,error: %s\n", Url, err)
-			channnel <- -1
+			channel <- -1
 			return
 		}
 		RangeValue := fmt.Sprintf("bytes=%d-%d", startOffset, endOffset)
@@ -378,12 +528,39 @@ func Worker(file *os.File, Url string, startOffset, endOffset int64, channnel ch
 			}
 		}
 		if rep == nil {
-			channnel <- -1 //该任务失败，该任务需要重试
+			channel <- -1 //该任务失败，该任务需要重试
+			return
+		}
+		var i int = 0
+		file.Seek(startOffset, 0)
+		var needSize int64 = (endOffset - startOffset + 1)
+		for i = retry_max_num; i > 0; i-- {
+			written, err := io.CopyN(file, rep.Body, needSize)
+			if err == nil && written == needSize {
+				fmt.Printf("Written :%d,StartOffset :%d ,EndOffset :%d,needSize :%d\n", written, startOffset, endOffset, needSize)
+				break
+			} else if err != io.EOF {
+				fmt.Printf("io.Copy() ,error:%s\n", err)
+				channel <- -1
+				return
+			}
+		}
+
+		defer rep.Body.Close()
+		if i < 0 {
+			channel <- -1
+			return
+		} else {
+
+			endTime := time.Now().UnixNano()
+			fmt.Printf("Download the Range  is successful : File '%s',  Range : %s , Elapsed_time : %ds\n", file.Name(), RangeValue, (endTime-startTime)/int64(time.Second))
+			channel <- (endTime - startTime) / int64(time.Second)
 			return
 		}
 
 	} else { //单线程
-
+		start := time.Now().UnixNano()
+		end := time.Now().UnixNano()
 		fmt.Println("开始单线程下载......")
 		var rep *http.Response = nil
 		var err error
@@ -396,7 +573,7 @@ func Worker(file *os.File, Url string, startOffset, endOffset int64, channnel ch
 			}
 		}
 		if rep == nil {
-			channnel <- -1 //该任务失败，该任务需要重试
+			channel <- -1 //该任务失败，该任务需要重试
 			return
 		}
 
@@ -413,13 +590,16 @@ func Worker(file *os.File, Url string, startOffset, endOffset int64, channnel ch
 				}
 				file.Truncate(0) //清空文件
 			}
-
-			if i < 0 {
-				channnel <- -1
-			} else {
-				channnel <- 1
-			}
 			defer rep.Body.Close()
+			if i < 0 {
+				channel <- -1
+				return
+			} else {
+				end = time.Now().UnixNano()
+				channel <- ((end - start) / int64(time.Second))
+				return
+			}
+
 		} else if endOffset == startOffset { //目标文件大小未知,只能使用边写边增加文件大小
 			/*
 			 TODO : 更好的方法实现下载未知大小的文件
@@ -443,7 +623,9 @@ func Worker(file *os.File, Url string, startOffset, endOffset int64, channnel ch
 				}
 			}
 			defer rep.Body.Close()
-			channnel <- 0
+			end = time.Now().UnixNano()
+			channel <- ((end - start) / int64(time.Second))
+			return
 		}
 	}
 }
@@ -456,7 +638,7 @@ func main() {
 		channels := make([]chan int, len(*list))
 		for i, v := range *list {
 			channels[i] = make(chan int)
-			fmt.Printf("第%d集\n\tUrl :%s\n\tName :%s.%s\n", v.Sequence, v.DownUrL, v.Name, v.Suffix)
+			fmt.Printf("第%d集\n\tUrl :%s\n\tName :%s.%s\n", v.Sequence, v.DownUrl, v.Name, v.Suffix)
 			go Ventilator(v, 10, channels[i])
 		}
 
@@ -467,12 +649,12 @@ func main() {
 		}*/
 
 	Test := new(ResourceInfo)
-	Test.Name = "haozip_v4.3_jt"
+	Test.Name = "baidu"
 	Test.Suffix = "exe"
 	Test.Sequence = 0
-	Test.DownUrL = "http://download.2345.com/haozip/haozip_v4.3_jt.multi.exe"
-	test_channnel := make(chan int)
-	go Ventilator(*Test, 1, test_channnel)
+	Test.DownUrl = "http://weishi.baidu.com/index/minidownload/50011"
+	test_channnel := make(chan int64)
+	go Ventilator(*Test, 50, test_channnel)
 	re := <-test_channnel
 	if re == -1 {
 		fmt.Printf("the test is failed\n")
