@@ -16,6 +16,7 @@
 
 ###4. 在命令行里运行
     go get github.com/feimyy/iconv
+	go get github.com/feimyy/log
 	cd src/
     go build 163.go
 
