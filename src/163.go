@@ -476,7 +476,7 @@ func IsSupportMultiThread(Url string) int {
 	}
 
 }
-func Ventilator(item ResourceInfo, RoutineCount int, elapsee_senconds chan int64) {
+func Ventilator(item ResourceInfo, RoutineCount int, rate chan int64) {
 
 	//创建文件
 	file_name := fmt.Sprintf("[第%d集]%s.%s", item.Sequence, item.Name, item.Suffix)
@@ -520,12 +520,12 @@ func Ventilator(item ResourceInfo, RoutineCount int, elapsee_senconds chan int64
 					logger.Errorf("不能改变指定文件大小 :%s\n", err)
 				}
 
-				elapsee_senconds <- -1
+				rate <- -1
 				return
 			}
 		}
 	} else if ContentLength == -1 {
-		elapsee_senconds <- -1
+		rate <- -1
 		return
 	}
 
@@ -545,7 +545,7 @@ func Ventilator(item ResourceInfo, RoutineCount int, elapsee_senconds chan int64
 			logger.Infof("目标主机支持多线程下载\n")
 		}
 	} else if IsSupport == -1 {
-		elapsee_senconds <- -1
+		rate <- -1
 		return
 	}
 
@@ -568,9 +568,11 @@ func Ventilator(item ResourceInfo, RoutineCount int, elapsee_senconds chan int64
 				}
 			}
 			if i < 0 {
-				elapsee_senconds <- -1
+				rate <- -1
 			} else {
-				elapsee_senconds <- ((endTime - startTime) / int64(time.Second))
+				elapsed_senconds := ((endTime - startTime) / int64(time.Second))
+				Stat, _ := file.Stat()
+				rate <- Stat.Size() / 1024 / elapsed_senconds
 			}
 		} else if ContentLength == 0 { //目标文件大小未知
 
@@ -591,12 +593,15 @@ func Ventilator(item ResourceInfo, RoutineCount int, elapsee_senconds chan int64
 				}
 			}
 			if i < 0 {
-				elapsee_senconds <- -1
+				rate <- -1
 			} else {
-				elapsee_senconds <- ((endTime - startTime) / int64(time.Second))
+				elapsee_senconds := ((endTime - startTime) / int64(time.Second))
+				Stat, _ := file.Stat()
+				rate <- Stat.Size() / 1024 / elapsee_senconds
 			}
 		}
 	} else { //多线程下载
+		start_time := time.Now().UnixNano()
 		channels := make([]chan int64, 0)
 
 		block := ContentLength / int64(RoutineCount)
@@ -649,7 +654,7 @@ func Ventilator(item ResourceInfo, RoutineCount int, elapsee_senconds chan int64
 		}
 
 		//等待Routines返回
-		var costSenconds int64 = 0
+
 		for i, v := range channels {
 
 			stdoutLogger.Debugf("文件 %s :开始等待第 %d 个下载Routine退出\n", file_name, i)
@@ -659,11 +664,11 @@ func Ventilator(item ResourceInfo, RoutineCount int, elapsee_senconds chan int64
 
 			r := <-v
 			if r != -1 { //routine成功下载文件
-				stdoutLogger.Infof("文件 %s 的 第 %d 个下载Routine下载成功，消耗时间:%d s\n", file_name, i, r)
+				stdoutLogger.Infof("文件 %s 的 第 %d 个下载Routine下载成功，消耗时间:%d s,平均下载速度:%d Kb/s\n", file_name, i, r, (block/1000)/r)
 				if logger != nil {
-					logger.Infof("文件 %s 的 第 %d 个下载Routine下载成功，消耗时间:%d s\n", file_name, i, r)
+					logger.Infof("文件 %s 的 第 %d 个下载Routine下载成功，消耗时间:%d s,平均下载速度:%d Kb/s\n", file_name, i, r, (block/1000)/r)
 				}
-				costSenconds += r
+
 			} else { //该routine失败,重试之
 				stdoutLogger.Errorf("文件 %s 的 第 %d 个下载Routine下载失败,重试...\n", file_name, i)
 				if logger != nil {
@@ -680,7 +685,10 @@ func Ventilator(item ResourceInfo, RoutineCount int, elapsee_senconds chan int64
 					go Worker(file, item.DownUrl, start, end, v)
 					new_r := <-v
 					if new_r != -1 {
-						fmt.Printf("文件 %s 的 第 %d 个下载Routine重新下载成功，消耗时间:%d s\n", file_name, i)
+						stdoutLogger.Infof("文件 %s 的 第 %d 个下载Routine重新下载成功，消耗时间:%d s,平均下载速度:%d Kb/s\n", file_name, i, new_r, (block/1024)/new_r)
+						if logger != nil {
+							logger.Infof("文件 %s 的 第 %d 个下载Routine重新下载成功，消耗时间:%d s,平均下载速度:%d Kb/s\n", file_name, i, new_r, (block/1024)/new_r)
+						}
 						break
 					}
 				}
@@ -698,7 +706,11 @@ func Ventilator(item ResourceInfo, RoutineCount int, elapsee_senconds chan int64
 
 			}
 		}
-		elapsee_senconds <- costSenconds
+		end_time := time.Now().UnixNano()
+		elapsee_senconds := (end_time - start_time) / int64(time.Second)
+		Stat, _ := file.Stat()
+		rate <- Stat.Size() / 1024 / elapsee_senconds
+
 	}
 }
 
@@ -982,6 +994,8 @@ func main() {
 
 	channels := make([]chan int64, 0)
 	for i, v := range *list {
+
+		start_time := time.Now().UnixNano()
 		if len(e.needlist) != 0 &&
 			!e.IsNeedEpisode(i+1) {
 			continue
@@ -999,7 +1013,9 @@ func main() {
 			go Ventilator(v, RoutineNum, channel)
 			r := <-channel
 			if r != -1 {
-				msg := fmt.Sprintf("文件 ‘%s’ 下载完成!!! 消耗时间:%ds\n", (*list)[i].Name+"."+(*list)[i].Suffix, r)
+				end_time := time.Now().UnixNano()
+				elapsed_time := (end_time - start_time) / int64(time.Second)
+				msg := fmt.Sprintf("文件 ‘%s’ 下载完成!!! 消耗时间:%ds,平均下载速度:%d Kb/s\n", (*list)[i].Name+"."+(*list)[i].Suffix, elapsed_time, r)
 				stdoutLogger.Infof("%s", msg)
 				if logger != nil {
 					logger.Infof("%s", msg)
