@@ -54,6 +54,100 @@ type ResourceInfo struct {
 	Sequence int //该视频是第几集
 }
 
+type EpisodeList struct {
+	needlist []int
+}
+
+func (e *EpisodeList) ParseValue(value string, episode_num int) bool {
+
+	if e.IsNeedPartial() {
+
+		if len(value) == 1 { //--episode 1
+			n, err := strconv.Atoi(value)
+			if err == nil {
+				e.needlist = append(e.needlist, n)
+				stdoutLogger.Debugf("Single episode :%d,list :%v\n", n, e.needlist)
+				return false
+			} else {
+				stdoutLogger.Debugf("strconv.Atoi() ,value : :%s,err :%s\n", value, err)
+				return true
+			}
+		} else if strings.Contains(value, ",") { //--episode 1,2,3
+			list := strings.Split(value, ",")
+			stdoutLogger.Debugf("multi episode :")
+			for _, v := range list {
+				n, err := strconv.Atoi(v)
+				if err != nil {
+					stdoutLogger.Debugf("strconv.Atoi() ,value : :%s,err :%s\n", value, err)
+					return true
+				} else {
+					e.needlist = append(e.needlist, n)
+				}
+
+			}
+			stdoutLogger.Debugf("\n")
+			return false
+		} else if strings.Contains(value, "-") { //--episode 1-10
+			list := strings.Split(value, "-")
+			if len(list) > 2 {
+				return true
+			}
+
+			stdoutLogger.Debugf("episode range mode\n")
+			//parse the start position
+			n, err := strconv.Atoi(list[0])
+			if err != nil {
+				stdoutLogger.Debugf("strconv.Atoi() ,value : :%s,err :%s\n", value, err)
+				return true
+			} else {
+				e.needlist = append(e.needlist, n)
+			}
+
+			//parse the end position
+			if len(list[1]) == 0 { // --episode 1-
+				for i := n + 1; i <= episode_num; i++ {
+					e.needlist = append(e.needlist, i)
+				}
+				return false
+			} else {
+				n1, err := strconv.Atoi(list[1])
+				if err != nil {
+					return true
+				} else {
+					for i := n + 1; i <= n1; i++ {
+						e.needlist = append(e.needlist, i)
+					}
+
+				}
+				return false
+			}
+		} else {
+			return true
+		}
+	} else {
+		return true
+	}
+}
+
+func (e EpisodeList) IsNeedEpisode(seq int) bool {
+	for _, v := range e.needlist {
+		if v == seq {
+			return true
+		}
+	}
+	return false
+}
+
+//whether the episode flag be setted
+func (e EpisodeList) IsNeedPartial() bool {
+	for _, v := range os.Args[1:] {
+		if strings.Contains(v, "episode") {
+			return true
+		}
+	}
+
+	return false
+}
 func checkError(err error) {
 	if err == io.EOF {
 		return
@@ -788,6 +882,16 @@ func Usage() {
 	fmt.Printf("\t\t%d : Debug mode\n", Ldebug)
 	fmt.Printf("\t\t%d : Info mode\n", Linfo)
 	fmt.Printf("\t\t%d : Error mode\n", Lerror)
+	fmt.Printf("\t--episode :\n")
+	fmt.Printf("\t\tthe episode what you need to download\n\n")
+	fmt.Printf("\t\tIf you only need one episode ,the value should be a number\n")
+	fmt.Printf("\t\tIf you need multi-episode,the value should be many numbers, and splitd by ','\n")
+	fmt.Printf("\t\tIf you need a range ,the split flag is '-'\n\n")
+	fmt.Printf("\t\tfor example :\n")
+	fmt.Printf("\t\t--episode 1     : you only need the episode one \n")
+	fmt.Printf("\t\t--episode 1,3,5 : you need the episode one,episode three ,and the episode five\n")
+	fmt.Printf("\t\t--episode 1-10  : you need one range ,and it is  : 1-10\n")
+	fmt.Printf("\t\t--episode 1-    : you need those episodes : from episode one to the last episode\n")
 	fmt.Printf("\nFor example : \n\t%s --url http://v.163.com/special/justice/ --rnum 20\n", strings.Join(os.Args[0:1], ""))
 }
 
@@ -808,7 +912,7 @@ func main() {
 		return
 	}
 
-	var Url string
+	var Url, EpisodeValue string
 	var RoutineNum, Level int
 	var IsLogToFile, IsVerbose bool
 	flag.StringVar(&Url, "url", "", "the url of opencourse")
@@ -816,6 +920,7 @@ func main() {
 	flag.IntVar(&Level, "level", -1, "the log level that recording to file ")
 	flag.BoolVar(&IsLogToFile, "file", false, "whether written the log to file,Note : if the flag is setted ,the level flag must be too!!! ")
 	flag.BoolVar(&IsVerbose, "verbose", false, "verbose mode")
+	flag.StringVar(&EpisodeValue, "episode", "", "the episode what you need to download")
 	flag.Parse()
 
 	//参数检查
@@ -831,6 +936,8 @@ func main() {
 		return
 	}
 
+	var e EpisodeList
+
 	var stdoutLogger_level int = logex.Lerror | logex.Linfo
 	if is_verbose {
 		stdoutLogger_level |= logex.Ldebug
@@ -842,6 +949,18 @@ func main() {
 	sourceCode := getSourceCode(Url)
 	list := getResourceDownloadList(sourceCode)
 
+	if e.IsNeedPartial() {
+		stdoutLogger.Debugf("Partial mode\n")
+		if e.ParseValue(EpisodeValue, len(*list)) {
+			fmt.Printf("the value of episode param is incorectly!!!\n")
+			Usage()
+			return
+		}
+	} else {
+		stdoutLogger.Debugf("normal mode\n")
+	}
+
+	fmt.Printf("episode list :%v\n", e.needlist)
 	if IsLogToFile && Level != -1 {
 		if Level == Linfo ||
 			Level == Ldebug ||
@@ -863,7 +982,11 @@ func main() {
 
 	channels := make([]chan int64, 0)
 	for i, v := range *list {
+		if len(e.needlist) != 0 &&
+			!e.IsNeedEpisode(i+1) {
+			continue
 
+		}
 		if IsLogToFile && Level != -1 {
 			logfile := NewLogFile(v.Name, Level)
 			defer logfile.Close()
