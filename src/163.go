@@ -765,14 +765,14 @@ func Worker(file *os.File, Url string, startOffset, endOffset int64, channel cha
 					logger.Debugf("File :%s ,Range : %d-%d ,needSize :%d ,written :%d\n", Stat.Name(), startOffset, endOffset, needSize, written)
 				}
 				break
-			} else if err != io.EOF {
+			} else if err != nil {
 				stdoutLogger.Errorf("io.CopyN() error: %s Range : %d - %d ,error:%s\n", Stat.Name(), startOffset, endOffset, err)
 				if logger != nil {
 					logger.Errorf("io.CopyN() error: %s Range : %d - %d ,error:%s\n", Stat.Name(), startOffset, endOffset, err)
 				}
 				channel <- -1
 				return
-			} else if err == io.EOF {
+			} /* else if err == io.EOF {
 
 				stdoutLogger.Debugf("File :%s ,Range : %d-%d ,needSize :%d ,written :%d, error: io.EOF\n", Stat.Name(), startOffset, endOffset, needSize, written)
 
@@ -780,7 +780,7 @@ func Worker(file *os.File, Url string, startOffset, endOffset int64, channel cha
 					logger.Debugf("File :%s ,Range : %d-%d ,needSize :%d ,written :%d, error: io.EOF\n", Stat.Name(), startOffset, endOffset, needSize, written)
 				}
 				break
-			}
+			}*/
 		}
 
 		defer rep.Body.Close()
@@ -835,7 +835,7 @@ func Worker(file *os.File, Url string, startOffset, endOffset int64, channel cha
 					if logger != nil {
 						logger.Errorf("io.CopyN() error: %s\n", err)
 					}
-					panic(err)
+					//panic(err)
 				}
 				file.Truncate(0) //清空文件
 			}
