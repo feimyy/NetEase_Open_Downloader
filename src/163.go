@@ -29,7 +29,7 @@ var (
 	is_verbose              bool          = false
 	logfile_level           int           = Linfo
 	logger                  *logex.Logger = nil
-	stdoutLogger            *logex.Logger = nil
+	stdoutLogger            *logex.Logger = logex.Std //default value
 )
 
 const (
@@ -130,9 +130,11 @@ func (e *EpisodeList) ParseValue(value string, episode_num int) bool {
 }
 
 func (e EpisodeList) IsNeedEpisode(seq int) bool {
-	for _, v := range e.needlist {
-		if v == seq {
-			return true
+	if len(e.needlist) > 0 {
+		for _, v := range e.needlist {
+			if v == seq {
+				return true
+			}
 		}
 	}
 	return false
@@ -478,17 +480,39 @@ func IsSupportMultiThread(Url string) int {
 }
 func Ventilator(item ResourceInfo, RoutineCount int, rate chan int64) {
 
+	defer func() {
+		if err := recover(); err != nil {
+			stdoutLogger.Errorf("A Ventilator panic an error , Seq :%d, error :%s,retry it !!\n", item.Sequence, err)
+			if logger != nil {
+				logger.Errorf("A Ventilator panic an error , Seq :%d, error :%s,retry it !!", item.Sequence, err)
+			}
+			panic(err)
+			rate <- -1
+		}
+	}()
+
 	//创建文件
 	file_name := fmt.Sprintf("[第%d集]%s.%s", item.Sequence, item.Name, item.Suffix)
 	file_name = filtLegalString(file_name)
-	file, err := os.Create(file_name)
+	file, err := os.OpenFile(file_name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0666)
+	defer file.Close()
 	if err != nil {
-		stdoutLogger.Errorf("os.Create() ,file_name :%s ,error :%s\n", file_name, err)
-		if logger != nil {
-			logger.Errorf("os.Create() ,file_name :%s ,error :%s\n", file_name, err)
+		if os.IsExist(err) {
+			stdoutLogger.Errorf("%s 已经存在,它将不会被重新下载!!\n", file_name)
+			if logger != nil {
+				logger.Errorf("%s 已经存在,它将不会被重新下载!!\n", file_name)
+			}
+			rate <- 0
+			return
+		} else {
+			stdoutLogger.Errorf("os.OpenFile() ,file_name :%s ,error :%s\n", file_name, err)
+			if logger != nil {
+				logger.Errorf("os.Create() ,file_name :%s ,error :%s\n", file_name, err)
+			}
+			rate <- -1
+			return
 		}
 	}
-	defer file.Close()
 
 	stdoutLogger.Infof("开始下载视频:%s\n", item.Name)
 	if logger != nil {
@@ -715,6 +739,17 @@ func Ventilator(item ResourceInfo, RoutineCount int, rate chan int64) {
 }
 
 func Worker(file *os.File, Url string, startOffset, endOffset int64, channel chan int64) {
+	defer func() {
+		if err := recover(); err != nil {
+			stdoutLogger.Errorf("A worker panic an error , range :%d-%d,error :%s,retry it !!", startOffset, endOffset, err)
+			if logger != nil {
+				logger.Errorf("A worker panic an error , range :%d-%d,error :%s,retry it !!", startOffset, endOffset, err)
+			}
+			channel <- -1
+			return
+		}
+	}()
+
 	Stat, _ := file.Stat()
 	size := Stat.Size()
 	if size > 0 && endOffset > startOffset { //多线程
@@ -764,14 +799,13 @@ func Worker(file *os.File, Url string, startOffset, endOffset int64, channel cha
 				if logger != nil {
 					logger.Debugf("File :%s ,Range : %d-%d ,needSize :%d ,written :%d\n", Stat.Name(), startOffset, endOffset, needSize, written)
 				}
+				file.Sync()
 				break
 			} else if err != nil {
-				stdoutLogger.Errorf("io.CopyN() error: %s Range : %d - %d ,error:%s\n", Stat.Name(), startOffset, endOffset, err)
+				stdoutLogger.Errorf("io.CopyN() error: %s Range : %d - %d ,error:%s ,written :%d,Retry it !!!\n", Stat.Name(), startOffset, endOffset, err, needSize, written)
 				if logger != nil {
-					logger.Errorf("io.CopyN() error: %s Range : %d - %d ,error:%s\n", Stat.Name(), startOffset, endOffset, err)
+					logger.Errorf("io.CopyN() error: %s Range : %d - %d ,error:%s,written :%d,Retry it !!!\n", Stat.Name(), startOffset, endOffset, err, needSize, written)
 				}
-				channel <- -1
-				return
 			} /* else if err == io.EOF {
 
 				stdoutLogger.Debugf("File :%s ,Range : %d-%d ,needSize :%d ,written :%d, error: io.EOF\n", Stat.Name(), startOffset, endOffset, needSize, written)
@@ -829,6 +863,7 @@ func Worker(file *os.File, Url string, startOffset, endOffset int64, channel cha
 			for i = retry_max_num; i > 0; i-- {
 				written, err := io.Copy(file, rep.Body)
 				if err == nil && written == (endOffset-startOffset+1) {
+					file.Sync()
 					break
 				} else {
 					stdoutLogger.Errorf("io.CopyN() error: %s\n", err)
@@ -868,6 +903,7 @@ func Worker(file *os.File, Url string, startOffset, endOffset int64, channel cha
 					file.Seek(default_file_size, 1) //移动偏移
 				} else if err2 == io.EOF {
 					file.Truncate(i*default_file_size + n)
+					file.Sync()
 					break
 				}
 			}
@@ -919,6 +955,13 @@ func NewLogFile(name string, level int) *os.File {
 }
 func main() {
 
+	defer func() {
+		if err := recover(); err != nil {
+			fmt.Printf("Main() panic an error , error :%s\n", err)
+			os.Exit(1)
+		}
+	}()
+
 	if len(os.Args) < 2 {
 		Usage()
 		return
@@ -954,7 +997,7 @@ func main() {
 	if is_verbose {
 		stdoutLogger_level |= logex.Ldebug
 	}
-	stdoutLogger = logex.New(os.Stderr, "", 0)
+	stdoutLogger = logex.New(os.Stdout, "", 0)
 	stdoutLogger.Level = stdoutLogger_level
 	//stdoutLogger.SetOutputLevel(stdoutLogger_level)
 
@@ -993,6 +1036,10 @@ func main() {
 	}
 
 	channels := make([]chan int64, 0)
+	if len(*list) == 0 {
+		fmt.Printf("the resource list is empty!!\n")
+		os.Exit(1)
+	}
 	for i, v := range *list {
 
 		start_time := time.Now().UnixNano()
