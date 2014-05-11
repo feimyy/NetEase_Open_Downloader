@@ -62,17 +62,7 @@ func (e *EpisodeList) ParseValue(value string, episode_num int) bool {
 
 	if e.IsNeedPartial() {
 
-		if len(value) == 1 { //--episode 1
-			n, err := strconv.Atoi(value)
-			if err == nil {
-				e.needlist = append(e.needlist, n)
-				stdoutLogger.Debugf("Single episode :%d,list :%v\n", n, e.needlist)
-				return false
-			} else {
-				stdoutLogger.Debugf("strconv.Atoi() ,value : :%s,err :%s\n", value, err)
-				return true
-			}
-		} else if strings.Contains(value, ",") { //--episode 1,2,3
+		if strings.Contains(value, ",") { //--episode 1,2,3
 			list := strings.Split(value, ",")
 			stdoutLogger.Debugf("multi episode :")
 			for _, v := range list {
@@ -122,7 +112,17 @@ func (e *EpisodeList) ParseValue(value string, episode_num int) bool {
 				return false
 			}
 		} else {
-			return true
+
+			//--episode 1
+			n, err := strconv.Atoi(value)
+			if err == nil {
+				e.needlist = append(e.needlist, n)
+				stdoutLogger.Debugf("Single episode :%d,list :%v\n", n, e.needlist)
+				return false
+			} else {
+				stdoutLogger.Debugf("strconv.Atoi() ,value : :%s,err :%s\n", value, err)
+				return true
+			}
 		}
 	} else {
 		return true
